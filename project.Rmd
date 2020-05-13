@@ -1,0 +1,221 @@
+---
+title: "Project"
+author: "Zhikang Dong zd2241"
+date: "5/9/2020"
+output: pdf_document
+bibliography: project_ref.bib
+csl: statistics.csl 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+In this project, we would like to analyze JPMorgan Chase&Co stock price stationarity and volatility. Then based on these results, we predict price log returns and perform risk management related to Nasdaq 100 index.
+
+The two data sets we used here are:
+
+Nasdaq 100 index: Weekly open price from 2010.01.01 to 2020.01.01
+
+JPMorgan Chase&Co: Weekly open price: from 2010.01.01 to 2020.01.01
+
+
+```{r ,echo=FALSE}
+library(readr)
+nasd <- read.csv("Nasdaq_100.csv")$Open
+jpm <- read.csv("JPM.csv")
+
+jpm$Date <- as.Date(jpm$Date)
+
+jpm <- jpm[jpm$Date>'2009-01-01'&jpm$Date<'2020-01-01',]
+```
+
+# Stationarity
+
+First, we'd like to check the stationarity of JPMorgan Chase&Co stock price. We plot original open price here, and find there is an upward trend in the plot, which means the stock price may not be stationary.
+
+```{r, echo=FALSE, fig.cap="Original Stock Price"}
+ts.plot(jpm[,2], ylab="Price", main="Original Stock Price")
+```
+
+Then we plot autocovariance funtion and autocorrelation function of this time series.
+
+\newpage
+
+From ACF plots, we see that the acf decreases when lag grows, we know that the time series is non-stationary[@text]. Also, we don't see seasonality from the plot.
+
+```{r, echo=F, fig.cap="ACF and PACF of original stock price", tidy=TRUE}
+par(mfrow=c(1, 2))
+acf(jpm[,2], na.action = na.pass, main="JPM")
+pacf(jpm[,2], na.action = na.pass, main="JPM")
+```
+
+In order to obtaining a stationary data, we make a difference with d=1 and plot ACF again. Roughly speaking, the differenced data is stationary without seasonality.
+
+```{r echo=FALSE, fig.cap="ACF plot of differened price"}
+jpm_diff <- diff(jpm[,2])
+acf(jpm_diff, na.action = na.pass, main="JPM")
+par(mfrow=c(1, 1))
+```
+
+To make sure our assumption, we fit the differenced data with SARIMA model[@text].
+
+```{r, echo=F, results='hide', message=FALSE}
+library(forecast)
+```
+```{r, echo=F}
+auto.arima(jpm_diff, max.p = 5, max.q = 5)
+```
+
+\newpage
+
+From the output, we can make sure that the differenced data is stationary, non-seasonal time series.
+
+Next, we check the goodness of fitting differenced data into ARMA(2,1) model.
+
+Intuitively, we can plot diagnostic figures (Figure 4) for residuals. We may assume that residuals is a white-noise process. To support our assumption, we preform Ljung-Box test, and find that p-value is .4766 which means the Ljung-Box test fails to reject the adequacy of the model. We may think that the fitted model is approriate[@text].
+
+```{r, echo=FALSE, fig.cap="Goodness of fit"}
+model <- arima(jpm_diff, order = c(2, 0, 1), include.mean = F)
+checkresiduals(model, plot = F)
+tsdiag(model)
+```
+
+
+# Volatility
+
+We would like to estimate volatility of log-returns of JPM. And log-returns can be computed as:
+$$r_t = log(\frac{P_t}{P_{t-1}})$$
+
+Then we just pass missing data, and get log-returns data:
+
+```{r, echo=FALSE}
+jpm_return <- log(jpm[-1,2]/jpm[-574,2])
+jpm_return <- jpm_return[!is.na(jpm_return)]
+```
+
+
+Here we choose GARCH(1, 1) model to fit the log-returns data.
+Let's check if the residuals follows normal distribution (Figure 5)
+
+```{r echo=FALSE, message=FALSE, fig.cap="Normal Distribution and T distribution QQ-Plot of Standardized Residuals"}
+library(fGarch)
+model2 <- garchFit(~1+garch(1, 1), data = jpm_return, trace = F)
+par(mfrow=c(1, 2))
+model3 <- garchFit(~1+garch(1, 1), data = jpm_return, trace = F, cond.dist = "sstd")
+plot(model2, which=13)
+plot(model3, which=13)
+```
+
+
+From the plot we see heavy tails exists, for better fitting, we choose skewed studentized-t distribution as conditional distribution and fit the data again:
+
+It seems like this model fits log-returns better, and we derive coefficients:
+```{r, echo=FALSE}
+model3@fit$par
+```
+
+More precisely, performing several test on residuals and residuals square, we have results:
+
+$$\begin{array}{lllll} & & & \text { Statistic } & p \text { -Value } \\ \text { Jarque-Bera Test } & \mathrm{R} & \mathrm{Chi} \wedge 2 & 227.8313 & 0 \\ \text { Shapiro-Wilk Test } & \mathrm{R} & \mathrm{W} & 0.9642111 & 1.596761 \times 10^{-10} \\ \text { Ljung-Box Test } & \mathrm{R} & \mathrm{Q}(10) & 11.96672 & 0.28729 \\ \text { Ljung-Box Test } & \mathrm{R} & \mathrm{Q}(15) & 13.11482 & 0.5934297 \\ \text { Ljung-Box Test } & \mathrm{R} & \mathrm{Q}(20) & 19.0799 & 0.5166382 \\ \text { Ljung-Box Test } & \mathrm{R}^{\wedge} 2 & \mathrm{Q}(10) & 11.83752 & 0.2960776 \\ \text { Ljung-Box Test } & \mathrm{R}^{\wedge} 2 & \mathrm{Q}(15) & 14.2206 & 0.5088688 \\ \text { Ljung-Box Test } & \mathrm{R}^{\wedge} 2 & \mathrm{Q}(20) & 18.40313 & 0.5608705 \\ \text { LM Arch Test } & \mathrm{R} & \mathrm{TR} \wedge 2 & 5.538428 & 0.9375422\end{array}$$
+
+We can know that p-value is relatively large in Ljung-Box Test, which means we fail to reject the adequancy of model. We have a good fitting here.
+
+After deciding coefficients of the model, we can plot volatility of log-returns(Figure 6):
+
+```{r, echo=FALSE, fig.cap="Volatility of log-returns"}
+ts.plot(volatility(model3),main="Volatility")
+```
+
+# Prediction
+
+We can also combine ARMA model and GARCH model to predict future log returns, which ARMA can predict expected mean and GARCH can predict expected variance[@text].
+
+First, we have to decide coefficients of ARMA model by using auto.arima function in R. Then we have an AR(3) model with coefficients:
+
+```{r echo=FALSE}
+auto.arima(jpm_return, max.p = 10, max.q = 10,
+           max.P = 10, max.Q = 10)$coef
+```
+Then we combine AR(3) model and GARCH(1, 1) model. Again, we use skewed t-distribution as conditional distribution.
+
+```{r, echo=FALSE, fig.cap="T-distribution QQ Plot"}
+model4 <- garchFit(~arma(3, 0)+garch(1, 1), trace = F, cond.dist = "sstd")
+plot(model4, which=13)
+```
+
+Based on this model, we can predict two-steps ahead log-returns.
+
+
+```{r, echo=FALSE}
+knitr::kable(predict(model4, n.ahead=2))
+```
+
+# Time-varying Beta
+
+In this section, we would like to analyze risk of JPMorgan Chase&Co related to Nasdaq 100 index in last 10 years.
+
+CAPM (capital asset pricing model) is one of the most common financial model. People use this model to establish the portfolio and estimate returns and market sensitivity. Here, we can use GARCH model to find betas (stock sensitivity) of the stock in different time. 
+
+We have the CAPM model like this[@financial]:
+
+$$r_{t}=\alpha+\beta r_{m, t}+e_{t}, \quad t=1, \ldots, T$$
+where $\alpha$ (Jensen index) means the mispricing of the stock compared with the market. 
+
+Generally, if $\beta$ is significantly greater than 0, which means that the stock responds aggresively to the market. On the other hand, if $\beta$ is relatively close to 0, then the market doesn't have much impact on it. Thus $\beta<1$ is regarded as less risky than the market, and $\beta>1$ indicates a high risk investment.
+
+In practice, we would like to see an asset outperform the market with less risk. Mathematically, $\alpha>0$ and $\beta$ is small.
+
+For the CAPM model above, we have[@pands]
+
+$$\hat\beta=\frac{\operatorname{Cov}\left(r_{t}, r_{m, t}\right)}{\operatorname{Var}\left(r_{m, t}\right)}$$
+
+where $r_t$ and $r_{m,t}$ are the log-return of the stock and the index we choose at time $t$.
+
+By fitting a good GARCH(1, 1) model, we can easily get volatility of the stock and the market[@financial].
+
+Here we can use $$\operatorname{Cov}\left(r_{t}, r_{m, t}\right)=\frac{\operatorname{Var}\left(r_t+r_{m, t}\right)-\operatorname{Var}\left(r_t-r_{m, t}\right)}{4}$$ to obtain the result.
+
+Firstly, we consider $\beta$ in traditional CAPM model[@esl].
+
+```{r, echo=FALSE}
+nasd_return <- log(nasd[-1]/nasd[-574])
+jpm_return <- log(jpm[-1,2]/jpm[-574,2])
+knitr::kable(data.frame(r_t=lm(jpm_return~nasd_return)$coefficient[[1]],
+           beta=lm(jpm_return~nasd_return)$coefficient[[2]]))
+```
+
+Then we calculate time-varying betas and plot them:
+
+```{r, echo=FALSE, warning=FALSE, fig.cap="Time varying betas and blue line represents traditional beta"}
+time_vary_beta <- function(rtn){
+  xp <- rtn+nasd_return
+  xm <- rtn-nasd_return
+  m1 <- garchFit(~1+garch(1, 1), data = xp, trace = F)
+  m2 <- garchFit(~1+garch(1, 1), data = xm, trace = F)
+  m3 <- garchFit(~1+garch(1, 1), data = nasd_return, trace = F)
+  vxp <- volatility(m1)
+  vxm <- volatility(m2)
+  vdji <- volatility(m3)
+  beta <- (vxp^2-vxm^2)/(4*vdji^2)
+}
+
+ts.plot(time_vary_beta(jpm_return[!is.na(jpm_return)]), ylab="Beta")
+abline(h=lm(jpm_return~nasd_return)$coefficient[[2]], col="blue", lwd=1.5)
+```
+
+From the plot, we know that time-varying plot can reflect risk more accurately.
+
+\newpage
+
+# Conclusion
+
+In this report, we find that JPMorgan Chase&Co. stock is an non-stationary and non-seasonal time series. After making difference, we can obtain a stationary process. We also show the volatility of the differenced data, which help us to dig out more information. Then we fit data to ARMA model and GARCH model and perform several important hypothesis testing to support our assumptions. We find GARCH(1,1) model explains the data well. We also use ARMA-GARCH model to find future price of the stock. At last, we calculate time varying betas of JPMorgan Chase&Co., we find although the stock outperforms the market a little, it has a very low risk, the price won't be fluctuate a lot.
+
+# Future works
+
+In the prediction section, the model we used here is still naive, and the prediction is not perfect. In future works, we may optimize our model and introduce more coefficients to help us make a good prediction.
+
+# References
